@@ -1,0 +1,38 @@
+{
+  "name": "dsh-page-refresh",
+  "description": "Refresh button in the DeepSeek Harness conversation header (desktop-first, client-only, zero tokens).",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/day-day-dream/dsh-page-refresh.git"
+  },
+  "homepage": "https://github.com/day-day-dream/dsh-page-refresh",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "reload",
+    "refresh"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}

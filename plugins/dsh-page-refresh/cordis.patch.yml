@@ -1,0 +1,4 @@
+# dsh-page-refresh bundle patch: inserts the client-only refresh button row.
+- insert:
+    - id: dsh-page-refresh
+      name: 'dsh-page-refresh'
