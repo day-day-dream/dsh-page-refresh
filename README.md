@@ -15,8 +15,15 @@
 
 ## 安装
 
+**npm（推荐，已发布 [`dsh-page-refresh`](https://www.npmjs.com/package/dsh-page-refresh)）：**
+
 ```powershell
-# 从仓库根目录执行（插件在 plugins/dsh-page-refresh/）
+npx @deepseek-ai/dsh plugin --profile web add dsh-page-refresh
+```
+
+**或从源码（本仓库插件在 `plugins/dsh-page-refresh/`）：**
+
+```powershell
 npx @deepseek-ai/dsh plugin --profile web add "<本仓库路径>\plugins\dsh-page-refresh"
 ```
 
