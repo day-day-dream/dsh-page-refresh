@@ -1,7 +1,7 @@
 {
   "name": "dsh-page-refresh",
-  "description": "Refresh button in the DeepSeek Harness conversation header (desktop-first, client-only, zero tokens).",
-  "version": "1.0.0",
+  "description": "Refresh button and a power menu (restart / close DeepSeek Harness) in the conversation header. Client-only, zero tokens, no dependencies.",
+  "version": "1.1.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
