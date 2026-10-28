@@ -4,6 +4,9 @@
   "version": "1.2.0",
   "type": "module",
   "main": "lib/index.js",
+  "engines": {
+    "dsh": ">=0.2.0-rc.2"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./client.js",
