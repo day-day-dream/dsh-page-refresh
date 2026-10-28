@@ -1,0 +1,3 @@
+_backup-before-*
+*.log
+node_modules/

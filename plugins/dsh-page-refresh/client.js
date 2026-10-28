@@ -141,10 +141,25 @@ window.__ModuleLoader__.load({
         // 渲染进程拿不到 Electron 的 app 对象（contextIsolation），调不了 app.quit()，
         // 但主人感知的是「界面在不在」—— 那就在点击的同一个 tick 里把界面抹掉，
         // 剩下的 200ms 谁也看不见。失败或 4 秒内没死就把界面还回来。
+        //
+        // 2026-10-29（issue #1 第 3 点）：不再 fetch(...).catch(() => {}) 一吞了之。
+        // 非 2xx 直接显示状态码与响应体首行；网络错误显示原因。失败不再等到超时。
         if (kind === 'close') {
           setNote({ bad: false, text: '正在关闭 DeepSeek Harness' });
           const veil = makeVeil('正在关闭 DeepSeek Harness');
-          fetch('/api/power/close', { method: 'POST' }).catch(() => {});
+          try {
+            const r = await fetch('/api/power/close', { method: 'POST' });
+            if (!r.ok) {
+              const body = await r.text().catch(() => '');
+              if (veil.parentNode) veil.remove();
+              setNote({ bad: true, text: '关闭请求被拒 HTTP ' + r.status + (body ? '\n' + body.split('\n')[0].slice(0, 120) : '') });
+              return;
+            }
+          } catch (e) {
+            if (veil.parentNode) veil.remove();
+            setNote({ bad: true, text: '关闭请求发不出去：' + (e && e.message ? e.message : '网络错误') });
+            return;
+          }
           setTimeout(() => {
             if (veil.parentNode) {
               veil.remove();
@@ -158,11 +173,28 @@ window.__ModuleLoader__.load({
         // 90 秒兜底：真没起来就把界面还回来，别让人对着黑屏发呆。
         setNote({ bad: false, text: '正在重启 DeepSeek Harness' });
         const veil = makeVeil('正在重启 DeepSeek Harness');
-        fetch('/api/power/restart', { method: 'POST' }).catch(() => {});
+        let logHint = '';
+        try {
+          const r = await fetch('/api/power/restart', { method: 'POST' });
+          if (!r.ok) {
+            const body = await r.text().catch(() => '');
+            if (veil.parentNode) veil.remove();
+            setNote({ bad: true, text: '重启请求被拒 HTTP ' + r.status + (body ? '\n' + body.split('\n')[0].slice(0, 120) : '') });
+            return;
+          }
+          try {
+            const j = await r.json();
+            if (j && j.logFile) logHint = '\n日志：' + j.logFile;
+          } catch { /* 响应不是 JSON 也无所谓 */ }
+        } catch (e) {
+          if (veil.parentNode) veil.remove();
+          setNote({ bad: true, text: '重启请求发不出去：' + (e && e.message ? e.message : '网络错误') });
+          return;
+        }
         setTimeout(() => {
           if (veil.parentNode) {
             veil.remove();
-            setNote({ bad: true, text: '没重启起来，双击桌面图标或告诉我' });
+            setNote({ bad: true, text: '没重启起来，双击桌面图标或告诉我' + logHint });
           }
         }, 90000);
       }
