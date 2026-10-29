@@ -142,37 +142,109 @@ Write-Log 'env' ('stripped=' + (($stripped | ForEach-Object { $_ }) -join ',') +
 
 $before = @(Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'").Count
 $workDir = Split-Path -Parent $exePath
-# KNOWN LIMITATION (reported by david-zdw against v1.2.0, not fixed as of 1.2.1):
-#   Start-Process makes the new DSH a child of THIS script's console. wmi-launch.ps1
-#   now creates that console hidden (ShowWindow = 0), so the window is unreachable
-#   and the reported symptom - "close the console and DSH dies" - is gone. But the
-#   console object still exists, so DSH is not yet fully decoupled from it.
-#   To finish the job, relaunch through WMI instead of Start-Process, e.g.
-#     cmd.exe /c cd /d "<workDir>" && start "" "<exe>" <args>
-#   (start returns at once, so the relay cmd exits and leaves no console to close).
-#   Deliberately NOT done here: this machine takes the custom-chain path, so the
-#   change could not be exercised end to end. Left as a documented follow-up rather
-#   than shipping an unverified relaunch path.
-try {
-  if ($restArgs) {
-    Start-Process -FilePath $exePath -ArgumentList $restArgs -WorkingDirectory $workDir -ErrorAction Stop
-  } else {
-    Start-Process -FilePath $exePath -WorkingDirectory $workDir -ErrorAction Stop
+
+# ---------- relaunch ----------
+# WHY THE WINDOW MATTERS (mechanism corrected in 1.2.2 - the 1.2.0/1.2.1 story was
+# wrong, and is corrected here rather than left standing in the docs):
+#
+#   The 1.2.0 report said closing the console took DSH down because the new instance
+#   was parented to that console. Measured, that is NOT what happens: with a
+#   charmap.exe stand-in, a GUI child survives its host's console being destroyed
+#   (3/3 for Start-Process, 3/3 for cmd /c start). A GUI-subsystem child is not
+#   "carried away" by console teardown.
+#
+#   What actually kills it: closing the window kills THIS SCRIPT, which at that
+#   moment is still mid-chain. Measured with a stand-in script (write, sleep 12s,
+#   write): leaving the window alone it finished 3/3; posting WM_CLOSE to its
+#   console during the sleep, the script died on the spot 3/3 and never executed a
+#   single later step. In the real chain that means the old instance is already
+#   killed (step 1) while relaunch (step 4) never runs - so DSH just disappears.
+#
+#   Hence the fix has two independent layers, and they are complementary:
+#     a) wmi-launch.ps1 creates this console hidden (ShowWindow = 0) - the user
+#        cannot see the window, so cannot close it, so cannot interrupt the chain.
+#     b) this relay shrinks the window in which an interruption would be fatal:
+#        the relay cmd exits in milliseconds instead of the script's whole ~5s.
+#        Even if (a) were somehow defeated, the exposure is far smaller.
+#
+# Two notes for whoever touches this next:
+#   - GenerateConsoleCtrlEvent CANNOT send CTRL_CLOSE_EVENT (returns False; the docs
+#     say only the system generates it). Reproducing "user closes the window" means
+#     really closing a window - a synthetic call will silently not work.
+#   - Start-Process is kept for the argument-carrying case: 'start' treats its first
+#     quoted token as the WINDOW TITLE, so splicing arguments into it is fragile.
+#     Relay only when no argument would be re-interpreted by the relay's cmd.
+#
+# NOTE (measured, 1.2.2): an earlier cut of this used the relay only when there were
+# NO arguments. On this machine a restart always carries arguments
+# (--disable-features=... --remote-debugging-port=...), so that version silently
+# never took the relay - every run logged "via=start-process". Hence the character
+# check below instead of an emptiness check. Arguments are written into the relay
+# file verbatim, so there is no re-quoting round trip; the check only rejects ones
+# cmd itself would treat specially.
+$relaySafe = ($restArgs -notmatch '[&|<>^%`"]') -and ($restArgs -notmatch "'")
+$useRelay = $relaySafe
+if ($useRelay) {
+  # One-shot relay: cd to the workdir, hand the exe (and its arguments) to 'start'
+  # which returns at once, then delete itself. Measured lifetime: 78-122 ms over
+  # three runs, against roughly 5-25 s of exposure for the script as a whole.
+  $relayPath = Join-Path $env:TEMP ('dsh-relaunch-relay-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.cmd')
+  $startLine = 'start "" "' + $exePath + '"'
+  if ($restArgs) { $startLine = $startLine + ' ' + $restArgs }
+  $relay = @()
+  $relay += '@echo off'
+  $relay += 'cd /d "' + $workDir + '"'
+  $relay += $startLine
+  $relay += 'del "%~f0" >nul 2>&1'
+  try {
+    Set-Content -LiteralPath $relayPath -Value $relay -Encoding ASCII
+    Start-Process cmd.exe -ArgumentList ('/c "' + $relayPath + '"') -WindowStyle Hidden -ErrorAction Stop
+    Write-Log 'relaunch' ('via=cmd-start exe=' + $exePath + ' args=' + $restArgs + ' workdir=' + $workDir + ' relay=' + $relayPath)
+  } catch {
+    Write-Log 'relaunch-relay-failed' $_.Exception.Message
+    $useRelay = $false
   }
-  Write-Log 'relaunch' ('exe=' + $exePath + ' args=' + $restArgs + ' workdir=' + $workDir)
-} catch {
-  Write-Log 'relaunch-failed' $_.Exception.Message
-  exit 3
+}
+if (-not $useRelay) {
+  if ($restArgs) { Write-Log 'relaunch-relay-skipped' ('arguments are not relay-safe: ' + $restArgs) }
+  try {
+    if ($restArgs) {
+      Start-Process -FilePath $exePath -ArgumentList $restArgs -WorkingDirectory $workDir -ErrorAction Stop
+    } else {
+      Start-Process -FilePath $exePath -WorkingDirectory $workDir -ErrorAction Stop
+    }
+    Write-Log 'relaunch' ('via=start-process exe=' + $exePath + ' args=' + $restArgs + ' workdir=' + $workDir)
+  } catch {
+    Write-Log 'relaunch-failed' $_.Exception.Message
+    exit 3
+  }
 }
 
 # ---------- verify the new instance actually came up ----------
-# "Start-Process returned" only means the OS accepted the launch request.
+# "The launch call returned" only means the OS accepted the request.
+# 10-second fallback: if the relay did not produce a process, fall back to
+# Start-Process once. The relay must never be the reason a restart fails.
 $deadline = (Get-Date).AddSeconds(20)
+$fallbackAt = (Get-Date).AddSeconds(10)
+$fallbackDone = $false
 $alive = 0
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 500
   $alive = @(Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'").Count
   if ($alive -gt 0) { break }
+  if ($useRelay -and -not $fallbackDone -and (Get-Date) -ge $fallbackAt) {
+    $fallbackDone = $true
+    Write-Log 'relaunch-fallback' 'relay produced nothing in 10s, retrying via start-process'
+    try {
+      if ($restArgs) {
+        Start-Process -FilePath $exePath -ArgumentList $restArgs -WorkingDirectory $workDir -ErrorAction Stop
+      } else {
+        Start-Process -FilePath $exePath -WorkingDirectory $workDir -ErrorAction Stop
+      }
+    } catch {
+      Write-Log 'relaunch-fallback-failed' $_.Exception.Message
+    }
+  }
 }
 if ($alive -gt 0) {
   Write-Log 'verify-ok' ('processes=' + $alive + ' (before=' + $before + ')')
