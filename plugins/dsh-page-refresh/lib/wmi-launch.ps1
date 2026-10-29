@@ -62,14 +62,50 @@ if ($WorkDir -and (Test-Path $WorkDir)) {
   $out.WriteLine('wmi-launch: wrapped for workdir')
 }
 
+# Pass a Win32_ProcessStartup so the child gets NO VISIBLE console.
+#
+# Why this matters (reported by david-zdw against v1.2.0, reproduced and fixed here):
+#   without startup information the WMI-created powershell comes up with a VISIBLE
+#   console window; dsh-power.ps1 then launched the new DSH as a child of it, so
+#   closing that window sent CTRL_CLOSE and took DSH down with it.
+#
+# Alternatives that do NOT work on Windows PowerShell 5.1 (all measured):
+#   CreateFlags 0x08000000 (CREATE_NO_WINDOW)  -> Create returns 21 (invalid params)
+#   CreateFlags 0x00000008 (DETACHED_PROCESS)  -> process exists but the script never
+#     runs: PowerShell 5.1 cannot start its ConsoleHost without a console, so
+#     dsh-power.ps1's "start action=..." line never appears.
+# ShowWindow = 0 keeps the console object (script runs fine) but never shows it.
+$startup = $null
 try {
-  $res = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $finalCmd } -ErrorAction Stop
+  $startup = ([wmiclass]'Win32_ProcessStartup').CreateInstance()
+  $startup.ShowWindow = [uint16]0
 } catch {
-  $out.WriteLine('wmi-launch: EXCEPTION ' + $_.Exception.Message)
-  exit 6
+  $out.WriteLine('wmi-launch: startup object unavailable: ' + $_.Exception.Message)
+  $startup = $null
 }
 
-$out.WriteLine('wmi-launch: return=' + [string]$res.ReturnValue + ' pid=' + [string]$res.ProcessId)
+$res = $null
+try {
+  if ($startup -ne $null) {
+    $res = ([wmiclass]'Win32_Process').Create($finalCmd, $null, $startup)
+  } else {
+    $res = ([wmiclass]'Win32_Process').Create($finalCmd)
+  }
+} catch {
+  # Never let the startup object be the reason a restart fails: fall back to the
+  # parameterless CIM call that v1.2.0 shipped with (visible console, but works).
+  $out.WriteLine('wmi-launch: wmiclass path failed: ' + $_.Exception.Message)
+  try {
+    $cim = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $finalCmd } -ErrorAction Stop
+    $res = [PSCustomObject]@{ ReturnValue = $cim.ReturnValue; ProcessId = $cim.ProcessId }
+    $out.WriteLine('wmi-launch: fell back to Invoke-CimMethod (console will be visible)')
+  } catch {
+    $out.WriteLine('wmi-launch: FALLBACK FAILED ' + $_.Exception.Message)
+    exit 6
+  }
+}
+
+$out.WriteLine('wmi-launch: return=' + [string]$res.ReturnValue + ' pid=' + [string]$res.ProcessId + ' hidden=' + [string]($startup -ne $null))
 if ($res.ReturnValue -eq 0 -and $res.ProcessId) {
   exit 0
 }

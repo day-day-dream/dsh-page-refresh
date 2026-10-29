@@ -142,6 +142,17 @@ Write-Log 'env' ('stripped=' + (($stripped | ForEach-Object { $_ }) -join ',') +
 
 $before = @(Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'").Count
 $workDir = Split-Path -Parent $exePath
+# KNOWN LIMITATION (reported by david-zdw against v1.2.0, not fixed as of 1.2.1):
+#   Start-Process makes the new DSH a child of THIS script's console. wmi-launch.ps1
+#   now creates that console hidden (ShowWindow = 0), so the window is unreachable
+#   and the reported symptom - "close the console and DSH dies" - is gone. But the
+#   console object still exists, so DSH is not yet fully decoupled from it.
+#   To finish the job, relaunch through WMI instead of Start-Process, e.g.
+#     cmd.exe /c cd /d "<workDir>" && start "" "<exe>" <args>
+#   (start returns at once, so the relay cmd exits and leaves no console to close).
+#   Deliberately NOT done here: this machine takes the custom-chain path, so the
+#   change could not be exercised end to end. Left as a documented follow-up rather
+#   than shipping an unverified relaunch path.
 try {
   if ($restArgs) {
     Start-Process -FilePath $exePath -ArgumentList $restArgs -WorkingDirectory $workDir -ErrorAction Stop
