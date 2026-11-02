@@ -22,7 +22,7 @@
 //      不能从局域网或隧道调到。
 
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, statSync, appendFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, appendFileSync, mkdirSync, renameSync } from 'node:fs'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -75,13 +75,23 @@ function isLoopback(req) {
 const LOG_DIR = join(DSH_HOME, 'logs')
 const LOG_FILE = join(LOG_DIR, 'page-refresh-restart.log')
 
+// 日志上限：超过就轮转成 .1（只留一代，避免无限增长）。
+// 上限取 5MB：page-refresh 的日志每次重启只写几十行，这个量级足够排查好几周。
+const MAX_LOG = 5 * 1024 * 1024
+
 function logLine(tag, msg) {
-  const line = `[${new Date().toISOString()}] ${tag} ${msg}\n`
+  // 换行注入清洗：msg 可能来自外部输入（如 Host 头），带 \r\n 会伪造日志行。
+  const safe = String(msg).replace(/[\r\n]/g, ' ')
+  const line = `[${new Date().toISOString()}] ${tag} ${safe}\n`
   try {
     if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true })
+    // 轮转只在超限那次写之前做一次；.renameSync 失败不能拖垮主流程（同 append 的容错）。
+    if (existsSync(LOG_FILE) && statSync(LOG_FILE).size > MAX_LOG) {
+      try { renameSync(LOG_FILE, LOG_FILE + '.1') } catch { /* 忽略 */ }
+    }
     appendFileSync(LOG_FILE, line, 'utf8')
   } catch { /* 日志失败不能拖垮主流程 */ }
-  try { console.log('[page-refresh] ' + tag + ' ' + msg) } catch { /* GUI 无控制台 */ }
+  try { console.log('[page-refresh] ' + tag + ' ' + safe) } catch { /* GUI 无控制台 */ }
   return line
 }
 
@@ -120,10 +130,14 @@ function launchHidden(exe, args) {
     '-Args', args.map(quoteArg).join(' '),
   ], {
     detached: false,
-    stdio: 'ignore',
+    // §3.6：接住 wmi-launch.ps1 的输出（原来 stdio:'ignore' 全丢，失败只剩 spawn-exit code）。
+    // 子进程只活约 1 秒，不会撑爆管道。
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     env: cleanEnv(),
   })
+  child.stdout?.on('data', (d) => logLine('wmi-out', String(d).trim()))
+  child.stderr?.on('data', (d) => logLine('wmi-err', String(d).trim()))
   child.on('error', (e) => logLine('spawn-error', String(e?.message ?? e)))
   child.on('exit', (code) => logLine('spawn-exit', `code=${code}`))
   child.unref()
