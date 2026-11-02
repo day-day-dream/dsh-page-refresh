@@ -98,6 +98,11 @@ function cleanEnv() {
   return env
 }
 
+// 只处理「含空白」这一种情况：当前所有调用点都没有内嵌引号的参数。
+// 引号必须加在「要拼进 WMI 命令行的那一段」（args），不能加在 spawn 的 argv 外层 ——
+// Node 自己会给含空格的 argv 元素转义，两层叠加会变成 ""名称""，静默失败（实测：marker 不生成）。
+const quoteArg = (a) => (/\s/.test(a) ? '"' + String(a) + '"' : String(a))
+
 function launchHidden(exe, args) {
   logLine('spawn-wmi', `${exe} ${args.join(' ')}`)
   if (!existsSync(WMI_LAUNCH)) {
@@ -112,7 +117,7 @@ function launchHidden(exe, args) {
     '-WindowStyle', 'Hidden',
     '-File', WMI_LAUNCH,
     '-Exe', exe,
-    '-Args', args.join(' '),
+    '-Args', args.map(quoteArg).join(' '),
   ], {
     detached: false,
     stdio: 'ignore',
@@ -286,6 +291,12 @@ export function apply(ctx) {
     //
     // 不再加 setTimeout 保险：taskkill 自己要 160ms 左右才动手，而 sendJson 是
     // 毫秒级的同步写 socket，响应先出去没问题。原来那 120ms 是白等的。
+    // 2026-10-31 修复：原来是 ['/IM', 'DeepSeek Harness.exe', '/F']，拼出的命令行是
+    // `taskkill.exe /IM DeepSeek Harness.exe /F` —— 进程名没有引号，WMI 按空格拆参数，
+    // taskkill 收到的是 `/IM DeepSeek` 再加 `Harness.exe /F`，匹配不到进程，
+    // 于是「点了关闭、4 秒后界面还在」（client 那句报错就是这个）。
+    // 现在引号由 launchHidden 的 quoteArg 统一加 —— 这里**不要**手写 '"..."'，
+    // 否则会变成 ""DeepSeek Harness.exe""（双层引号，实测 marker 不生成）。
     launchHidden('taskkill.exe', ['/IM', 'DeepSeek Harness.exe', '/F'])
     return {
       ok: true,
