@@ -104,8 +104,8 @@ if ($Action -eq 'probe') {
 }
 
 # ---------- kill ----------
-# §3.8-1：$before 必须在 kill 之前统计（原来放在 relaunch 前、kill 之后，永远是 0，
-# 于是 verify-ok 里的 (before=N) 一直是 before=0，对不上账）。
+# 3.8-1: $before must be counted BEFORE the kill loop. It used to sit after the kill,
+# so verify-ok always reported before=0 and the numbers never reconciled.
 $before = @(Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'").Count
 $killed = 0
 foreach ($p in Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'") {
@@ -128,8 +128,9 @@ if (-not $exePath) {
 }
 
 # Let the old instance release its handles and single-instance lock.
-# §3.8-3：轮询替代固定 Start-Sleep 3s —— 每 200ms 查一次、最多 40 次（8s 上限）。
-# 通常 300–600ms 就能继续；超时按现状继续（不 abort），避免慢机器上在旧实例未退净时重拉。
+# 3.8-3: poll instead of a fixed Start-Sleep 3s -- check every 200ms, at most 40 times
+# (8s cap). Usually 300-600ms is enough; on timeout we continue anyway (no abort) so a
+# slow machine does not relaunch while the old instance still holds the single-instance lock.
 for ($i = 0; $i -lt 40; $i++) {
   if (@(Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'").Count -eq 0) { break }
   Start-Sleep -Milliseconds 200
@@ -148,7 +149,7 @@ foreach ($name in @('ELECTRON_RUN_AS_NODE', 'DSH_DESKTOP_NODE_EXECUTABLE')) {
 }
 Write-Log 'env' ('stripped=' + (($stripped | ForEach-Object { $_ }) -join ',') + ' electronRunAsNodeNow=' + [string]$env:ELECTRON_RUN_AS_NODE)
 
-# $before 已在 kill 前统计（见 kill 段开头）。
+# $before was already counted before the kill (see the kill section).
 $workDir = Split-Path -Parent $exePath
 
 # ---------- relaunch ----------
@@ -238,8 +239,9 @@ $fallbackDone = $false
 $alive = 0
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 500
-  # §3.8-2：判据用 Get-DshMainProcess（root = 父进程不在本批里的那个），
-  # 而不是数同名进程 —— 后者会把 crashpad_handler 等侧进程也算成「已重启成功」。
+  # 3.8-2: use Get-DshMainProcess (root = the one whose parent is not in this batch)
+  # instead of counting same-named processes -- the latter also counts crashpad_handler
+  # and friends as "restart succeeded".
   $alive = @(Get-DshMainProcess).Count
   if ($alive -gt 0) { break }
   if ($useRelay -and -not $fallbackDone -and (Get-Date) -ge $fallbackAt) {
