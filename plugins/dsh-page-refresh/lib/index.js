@@ -324,7 +324,21 @@ export function apply(ctx) {
     // 于是「点了关闭、4 秒后界面还在」（client 那句报错就是这个）。
     // 现在引号由 launchHidden 的 quoteArg 统一加 —— 这里**不要**手写 '"..."'，
     // 否则会变成 ""DeepSeek Harness.exe""（双层引号，实测 marker 不生成）。
-    launchHidden('taskkill.exe', ['/IM', 'DeepSeek Harness.exe', '/F'])
+    // §3.4【P1】关闭改为按 PID 杀树，不再按镜像名杀。
+    // 按名杀会命中**所有** DeepSeek Harness.exe —— 同时开着 desktop 与 web（或两个 desktop 实例）
+    // 时会一起关掉；按 PID + /T 只带走本实例的进程树，另一个实例不受影响。
+    // isDesktopHost：宿主由桌面壳以 ELECTRON_RUN_AS_NODE=1 拉起（本机实测该值为 "1"），
+    // 此时 process.ppid 就是 Electron 主进程，杀 /T 正好带走整个应用。
+    // CLI 场景下没有这个变量，绝不能按 ppid 杀（会波及用户终端），退回按名杀。
+    // §3.5 落地后：进程名传裸字符串，由 quoteArg 统一加引号（不要手写引号，会双层）。
+    const isDesktopHost = process.env.ELECTRON_RUN_AS_NODE === '1'
+    if (isDesktopHost) {
+      logLine('close', `kill-mode=tree pid=${process.ppid}`)
+      launchHidden('taskkill.exe', ['/PID', String(process.ppid), '/T', '/F'])
+    } else {
+      logLine('close', 'kill-mode=image')
+      launchHidden('taskkill.exe', ['/IM', 'DeepSeek Harness.exe', '/F'])
+    }
     return {
       ok: true,
       kind: 'close',
