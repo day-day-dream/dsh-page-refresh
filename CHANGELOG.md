@@ -21,11 +21,17 @@
 - **§3.3** 非 Windows 平台写端点直接回 501（原来 handler 返回 `ok:true` 后客户端要等 90 秒兜底）；客户端挂载时探一次 `/api/power/status`，非 Windows 把电源按钮置灰并注明原因。
 - **§3.10** 客户端五项：`note` 换行（`pre-wrap`）、条目常驻可重试（配 `busy` 禁用防双触发）、遮罩与定时器随组件卸载清理、Esc / 方向键 / 焦点入菜单、刷新图标从字形 `↻` 换成与电源同规格的 24 网格内联 SVG。
 
+### 真机验收（2026-11-03）
+
+- **§6.2 PASS**：把 `freeze-restart-hidden.vbs` 临时藏起来逼它走 portable 路径，实测 `killed count=4` → `env stripped` → `relaunch via=cmd-start`（原参数一条不落）→ `verify-ok processes=1 (before=6)`，两秒内走完。
+- **§6.1 PASS**：起一个 profile `petest` 的第二实例当对照，对主实例发 close，断言主树 6 个进程全灭、对照实例全活。日志里 `probe-parent pid=20500 ms=419 name=DeepSeek Harness.exe` 和 `kill-mode=tree pid=20500 parent=DeepSeek Harness.exe` 都齐了。
+- **验收期修掉的第二个真 bug**：§7-2 的父进程核验原来是二分法，「读不到名字」被划进了「R1 场景」那一侧，于是退回按名杀 —— 第一次 6.1 就是这样把对照实例一起杀掉的，等于把 §3.4 想解决的问题重新引回来。改成三分法后，读不到也走树杀。
+
 ### 已知限制
 
-- **§6.2** 通用重启路径 `dsh-power.ps1` 在本机永远走不到（`freeze-restart-hidden.vbs` 存在即走 custom-chain），只在单测里验过分支选择，没有真机跑过它的 restart。
 - **§6.3** 市场截图是否真被渲染，要发一个 patch 版本上去才能观察。
 - **§3.9** CORS 仍是 `access-control-allow-origin: *`，同源判定没有收紧（等确认是否还用 `dsh-web-lan-access` 从别的设备访问）。
+- **§6.4** 非 Windows 真机依旧没有设备可验，只有假 `process.platform` 的单测撑着。
 
 ## 1.2.2 及更早
 
