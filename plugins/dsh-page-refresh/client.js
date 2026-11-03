@@ -112,6 +112,16 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §3.10-5：刷新图标改为与 IconPower / IconRestart 同规格的内联 SVG。
+    // 原来用的是字符 '↻'，实测它的字体落到了 SimSun, serif —— 与另外两个按钮不同源，
+    // 换字号就会偏。SVG 走 currentColor（svgProps 里已设 stroke），三者风格统一。
+    function IconRefresh(props) {
+      return h('svg', svgProps(props.size),
+        h('path', { key: 'a', d: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8' }),
+        h('path', { key: 'b', d: 'M21 3v5h-5' }),
+      );
+    }
+
     // 全屏遮罩：点击的同一个 tick 里盖上，主人看到的就是「点下去界面没了」。
     // 不做渐隐 —— 渐隐反而把 0 延迟变回 120ms 的观感。
     function makeVeil(text) {
@@ -355,7 +365,7 @@ window.__ModuleLoader__.load({
         onMouseEnter: () => setHover(true),
         onMouseLeave: () => setHover(false),
         onClick: () => window.location.reload(),
-      }, '\u21BB'); // ↻
+      }, h(IconRefresh, { size: 16 })); // §3.10-5：与 IconPower/IconRestart 同源的内联 SVG
     }
 
     exports.name = 'dsh-page-refresh-client';
