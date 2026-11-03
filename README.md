@@ -48,6 +48,19 @@
 
 **验证范围**：本插件在一台 Windows 11 机器上实测通过（刷新、拉起菜单、两条重启路径、关闭）。**通用重启路径（`dsh-power.ps1`）已端到端真跑过** —— 临时把定制链的 vbs 藏起来逼它走 portable，实测 `killed count=4` → 剥离环境变量 → 按原命令行重拉 → `verify-ok`。**按 PID 杀树也已真机验过** —— 起第二个实例（另一 profile）当对照，对主实例点关闭，主树 6 个进程全灭、对照实例全活，日志里留下 `kill-mode=tree` 与核验耗时。另有 26 条单测覆盖分支选择、父进程核验的三条路径、平台 501 与日志轮转。尚未验证的只剩市场截图渲染，以及非 Windows 真机（没有设备）。如果你在别的机器上遇到问题，请带 `~/.dsh/logs/` 里的相关输出提 issue。
 
+## 测试
+
+仓库自带三个验收脚本，都不产生真实进程（`spawn` / `execFile` 被假模块整体替换）、也不碰真实 journal（改道到系统临时目录），任何机器上都能安全跑：
+
+```powershell
+cd plugins/dsh-page-refresh
+npm test          # 等价于 node tests/run-all.mjs
+```
+
+- `tests/verify-treekill.mjs` —— 26 条断言：关闭路径的两种分支、父进程核验的三条路径、`restart` 的 portable 兜底分支、四种日志留痕，以及 5MB 日志轮转
+- `tests/verify-501.mjs` —— 伪造非 Windows 平台，断言两个写端点回 501、只读端点仍 200
+- `tests/verify-quotearg.cjs` —— 从 `lib/index.js` 里**抽出真实的 `quoteArg` 实现**再跑 A/B 用例；不抄实现，所以将来改了实现测试就会红
+
 ## 安装
 
 **npm（已发布 [`dsh-page-refresh`](https://www.npmjs.com/package/dsh-page-refresh)）：**

@@ -3,6 +3,9 @@
   "description": "Refresh button and a power menu (restart / close DeepSeek Harness) in the conversation header. Client-only, zero tokens, no dependencies.",
   "version": "1.2.3",
   "type": "module",
+  "scripts": {
+    "test": "node tests/run-all.mjs"
+  },
   "main": "lib/index.js",
   "engines": {
     "dsh": ">=0.2.0-rc.2"
