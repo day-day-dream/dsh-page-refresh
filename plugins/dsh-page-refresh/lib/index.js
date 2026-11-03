@@ -213,6 +213,19 @@ export function apply(ctx) {
         res.end()
         return
       }
+      // §3.3【P0】非 Windows 快速失败：原来 handler 返回 ok:true 之后，客户端会进入 90 秒黑屏等待
+      //（spawn 的 ENOENT 是异步的，永远晚于 200 响应）。
+      // 位置：OPTIONS 之后（预检照常拿 204）、isLoopback 之前（平台不支持优先于来源判定）。
+      // 语义：用 501 而不是 200 + ok:false —— 客户端是按 HTTP 状态码判断的（提案 §3.3 注意事项）。
+      if (process.platform !== 'win32' &&
+          (path === '/api/power/restart' || path === '/api/power/close')) {
+        sendJson(res, 501, {
+          ok: false,
+          error: 'power API is Windows-only',
+          platform: process.platform,
+        })
+        return
+      }
       if (!isLoopback(req)) {
         const host = String(req.headers?.host ?? '-')
         const remote = String(req.socket?.remoteAddress ?? '-')
