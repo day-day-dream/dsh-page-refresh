@@ -11,6 +11,7 @@
 - **§3.6** `launchHidden` 接住 `wmi-launch.ps1` 的 stdout/stderr。原来 `stdio: 'ignore'` 把 `exe=/args=/cmdline=/return=` 全丢了，失败只剩一行 `spawn-exit code=…`。
 - **§3.7** 日志轮转（5MB 上限，转存 `.log.1`）；`denied` 行里的 Host 头做换行清洗。
 - **§3.8** `dsh-power.ps1` 三处修正：`$before` 的统计时机（原来在 kill 之后，永远是 0）、`verify-ok` 的判据（改成"存在一个父进程不在本批里的 root 进程"，不再把 crashpad 残留算成功）、固定 `Start-Sleep 3` 换成 200ms 轮询。
+- **§6.2 真机验收查出来的真 bug**：上面那三处修正当时往 `dsh-power.ps1` 里写进了中文注释，而 Windows PowerShell 5.1 读无 BOM 的 `.ps1` 是按 ANSI 解码的 —— 中文注释把后面的代码吃掉，整个脚本报 `Unexpected token '}'` 解析失败。插件调用的正是 5.1（不是 pwsh 7），所以**通用重启路径从来没有真正生效过**：点下去 API 返回 `mode=portable` 一切正常，实际没有任何进程被杀，app 原地不动。已恢复纯 ASCII，并用 5.1 真跑 `-Action probe` 验证能取到正确的 exe 与参数。
 - **§3.2** 打包补齐 `screenshots.json` / `assets/` / 包内 `README.md`（`npm pack` 6 → 9 个文件）。
 
 ### 新增
