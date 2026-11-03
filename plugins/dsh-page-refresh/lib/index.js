@@ -21,7 +21,7 @@
 //   4. 只放行回环直连（remote 地址 + Host 头双判）—— 这是能关掉 app 的接口，
 //      不能从局域网或隧道调到。
 
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync, appendFileSync, mkdirSync, renameSync } from 'node:fs'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +34,9 @@ const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 // 定制重启链只在本机存在；有就用它（清 cookie / swap asar / 验端口那套），
 // 没有就走通用路径（见 dsh-power.ps1），这样插件搬到别人机器上也能用。
 const RESTART_VBS = join(DSH_HOME, 'freeze-restart-hidden.vbs')
+// app 的镜像名。§3.4 的兜底分支与「父进程名核验」用它。
+// §3.5 之后这里传裸名、引号由 quoteArg 统一加（手写引号会变双层，实测静默失败）。
+const APP_IMAGE_NAME = 'DeepSeek Harness.exe'
 // journal 目录优先读环境变量（DSH 桌面版自己就靠它定位），否则用默认位置。
 const JOURNAL_DIR = process.env.DSH_DESKTOP_UPDATE_JOURNAL_DIR || join(DSH_HOME, 'logs', 'update-journal')
 // 通用路径用的助手脚本，跟着插件走。
@@ -112,6 +115,25 @@ function cleanEnv() {
 // 引号必须加在「要拼进 WMI 命令行的那一段」（args），不能加在 spawn 的 argv 外层 ——
 // Node 自己会给含空格的 argv 元素转义，两层叠加会变成 ""名称""，静默失败（实测：marker 不生成）。
 const quoteArg = (a) => (/\s/.test(a) ? '"' + String(a) + '"' : String(a))
+
+// §7-2（R1 消解）：读某个 PID 的镜像名，供 close 前的安全核验用。
+//
+// 为什么需要它：若有人手工 `set ELECTRON_RUN_AS_NODE=1` 后在终端里跑 host，
+// process.ppid 就是那个终端/shell —— 按树杀会把主人的终端一起带走。
+// 核出名字不是 app 就退回按名杀：宁可有「误关另一个实例」的小概率，
+// 也不把用户终端端掉（那种损失不可逆）。
+//
+// 代价：tasklist 冷启动约 270ms（遮罩已盖住，用户无感）；读不到一律 resolve(null)。
+const probeParentImageName = (pid) => new Promise((resolve) => {
+  execFile('tasklist.exe', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'], {
+    windowsHide: true,
+    timeout: 4000,
+  }, (err, stdout) => {
+    if (err) return resolve(null)
+    const m = /^"([^"]+)"/.exec(String(stdout).trim())
+    resolve(m ? m[1] : null)
+  })
+})
 
 function launchHidden(exe, args) {
   logLine('spawn-wmi', `${exe} ${args.join(' ')}`)
@@ -295,7 +317,9 @@ export function apply(ctx) {
     return { ok: true, kind: 'restart', mode: 'portable', delayMs: 0, logFile: LOG_FILE, message: '正在重启 DeepSeek Harness' }
   })
 
-  route('/api/power/close', () => {
+  // §7-2 落地后这里要 await 一次 tasklist，所以 handle 必须是 async
+  //（route 的包装器本来就是 `await handle()`，同步 handler 照样能返回对象）。
+  route('/api/power/close', async () => {
     // 尽力写一条 quit-requested：装了看门狗的机器，读到它就不会把 app 再拉起来。
     //
     // 但这一步必须「尽力而为」，不能拦着关闭 —— 查过 app.asar，journal 是 opt-in 的：
@@ -333,11 +357,19 @@ export function apply(ctx) {
     // §3.5 落地后：进程名传裸字符串，由 quoteArg 统一加引号（不要手写引号，会双层）。
     const isDesktopHost = process.env.ELECTRON_RUN_AS_NODE === '1'
     if (isDesktopHost) {
-      logLine('close', `kill-mode=tree pid=${process.ppid}`)
-      launchHidden('taskkill.exe', ['/PID', String(process.ppid), '/T', '/F'])
+      // §7-2 拍板为「加核验」：按树杀之前先花约 270ms 用 tasklist 确认 ppid 那个进程
+      // 确实是 DSH 主进程。名不符（手工设了环境变量跑 CLI 的场景）就退回按名杀。
+      const parentName = await probeParentImageName(process.ppid)
+      if (parentName === APP_IMAGE_NAME) {
+        logLine('close', `kill-mode=tree pid=${process.ppid} parent=${parentName}`)
+        launchHidden('taskkill.exe', ['/PID', String(process.ppid), '/T', '/F'])
+      } else {
+        logLine('close', `kill-mode=image reason=parent-not-app ppid=${process.ppid} parent=${parentName ?? 'unknown'}`)
+        launchHidden('taskkill.exe', ['/IM', APP_IMAGE_NAME, '/F'])
+      }
     } else {
-      logLine('close', 'kill-mode=image')
-      launchHidden('taskkill.exe', ['/IM', 'DeepSeek Harness.exe', '/F'])
+      logLine('close', 'kill-mode=image reason=not-desktop-host')
+      launchHidden('taskkill.exe', ['/IM', APP_IMAGE_NAME, '/F'])
     }
     return {
       ok: true,
