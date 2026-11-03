@@ -125,12 +125,20 @@ const quoteArg = (a) => (/\s/.test(a) ? '"' + String(a) + '"' : String(a))
 //
 // 代价：tasklist 冷启动约 270ms（遮罩已盖住，用户无感）；读不到一律 resolve(null)。
 const probeParentImageName = (pid) => new Promise((resolve) => {
+  const t0 = Date.now()
   execFile('tasklist.exe', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'], {
     windowsHide: true,
     timeout: 4000,
   }, (err, stdout) => {
-    if (err) return resolve(null)
-    const m = /^"([^"]+)"/.exec(String(stdout).trim())
+    const ms = Date.now() - t0
+    if (err) {
+      // 读失败一律记下来（原来静默 resolve(null)，出了事查不到原因）
+      logLine('probe-parent', 'pid=' + pid + ' ms=' + ms + ' err=' + String(err?.message ?? err))
+      return resolve(null)
+    }
+    const raw = String(stdout).trim()
+    const m = /^"([^"]+)"/.exec(raw)
+    logLine('probe-parent', 'pid=' + pid + ' ms=' + ms + ' name=' + (m ? m[1] : '(no-match)'))
     resolve(m ? m[1] : null)
   })
 })
@@ -359,12 +367,18 @@ export function apply(ctx) {
     if (isDesktopHost) {
       // §7-2 拍板为「加核验」：按树杀之前先花约 270ms 用 tasklist 确认 ppid 那个进程
       // 确实是 DSH 主进程。名不符（手工设了环境变量跑 CLI 的场景）就退回按名杀。
+      // 三分法（真机验收后修正）：
+      //   读到且就是 app  -> 按 PID 杀树
+      //   读到但不是 app（R1：手工设了环境变量在终端里跑）-> 按名杀，保终端
+      //   读不到（tasklist 自身出问题）-> 仍按树杀
+      // 原来把「读不到」归到按名杀，等于把「工具故障」当成「R1 场景」处理，
+      // 结果是误杀第二个实例——正好把 §3.4 想解决的问题重新引入。
       const parentName = await probeParentImageName(process.ppid)
-      if (parentName === APP_IMAGE_NAME) {
-        logLine('close', `kill-mode=tree pid=${process.ppid} parent=${parentName}`)
+      if (parentName === null || parentName === APP_IMAGE_NAME) {
+        logLine('close', `kill-mode=tree pid=${process.ppid} parent=${parentName ?? 'unknown'}`)
         launchHidden('taskkill.exe', ['/PID', String(process.ppid), '/T', '/F'])
       } else {
-        logLine('close', `kill-mode=image reason=parent-not-app ppid=${process.ppid} parent=${parentName ?? 'unknown'}`)
+        logLine('close', `kill-mode=image reason=parent-not-app ppid=${process.ppid} parent=${parentName}`)
         launchHidden('taskkill.exe', ['/IM', APP_IMAGE_NAME, '/F'])
       }
     } else {
