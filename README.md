@@ -1,14 +1,16 @@
 # dsh-page-refresh · 为 DeepSeek Harness 官方桌面版设计的会话头工具按钮
 
-给 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)（下称 DSH）的 **Web 界面**加两个会话头按钮：一个 `↻` 刷新、一个电源菜单（重启 / 关闭 DSH）。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)（下称 DSH）的 **Web 界面**加两个会话头按钮：一个刷新按钮、一个电源菜单（重启 / 关闭 DSH）。
 
 > **面向桌面版（Electron 壳）设计**：桌面版里 `F5` 常被网页浏览区域吃掉或与应用快捷键冲突，页面卡住时想刷新只能绕路；想退出应用又得去右下角托盘翻菜单。这两个按钮把它们放回会话头右上角，一次点击直达。Web 网页版同样可用（电源按钮在网页版下没有意义，见下文平台限制）。
+
+变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ![位置示意](plugins/dsh-page-refresh/assets/screenshot.png)
 
 ## 特性
 
-- **刷新按钮**：`↻` 一点即重载页面，等价 F5，不丢会话数据
+- **刷新按钮**：一点即重载页面，等价 F5，不丢会话数据。图标是与电源同规格的 24 网格内联 SVG，不用 `↻` 字形 —— 那个字形会落到 `SimSun, serif` 之类的字体上，换主题字体就偏，两个按钮看起来不同源
 - **电源菜单**：点电源图标拉出两个选项 —— **重启 DeepSeek Harness** / **关闭 DeepSeek Harness**
 - **位置固定**：会话头右侧工具区（`utilities` 槽位），电源在左、刷新在右（`order: 998` / `999`）
 - **零 token**：不注册任何 model tool，每轮对话成本为 0
@@ -19,7 +21,11 @@
 
 写这个功能的两个硬约束：**关掉之后不能被看门狗拉回来**，以及**重启要保留原来的启动参数**。
 
-**关闭**：先尽力往 DSH 的 update-journal 追加一条 `{"event":"quit-requested"}`（这是应用自身托盘「退出」走的同一机制，装了看门狗就会认得它），再 `taskkill` 杀进程。
+**关闭**：先尽力往 DSH 的 update-journal 追加一条 `{"event":"quit-requested"}`（这是应用自身托盘「退出」走的同一机制，装了看门狗就会认得它），再杀进程。
+
+> **杀的是自己这一棵进程树，不是所有同名进程**：宿主由桌面壳以 `ELECTRON_RUN_AS_NODE=1` 拉起，此时 `process.ppid` 就是 Electron 主进程，于是走 `taskkill /PID <ppid> /T /F`。同时开着第二个实例（另一个 profile，或 desktop 与 web 各一份）时，另一个实例不会被牵连。没有这个环境变量时（例如有人在终端里直接跑 CLI），退回按镜像名杀。
+
+> **按树杀之前先核一次名**：花约 270ms 用 `tasklist /FI "PID eq <ppid>" /NH /FO CSV` 读父进程的镜像名，确认它确实是 `DeepSeek Harness.exe` 才按树杀；名不符或读不到就退回按名杀。防的是「手工 `set ELECTRON_RUN_AS_NODE=1` 后在终端里跑 host」这一种情形 —— 那种情况下 `ppid` 是那个终端，按树杀会把它一起带走。日志里区分 `kill-mode=tree` 与 `kill-mode=image reason=…`，出问题一眼看得出走了哪条。
 
 > **journal 是 opt-in 的**：DSH 主进程读 `DSH_DESKTOP_UPDATE_JOURNAL_DIR` 环境变量，没设时它根本不建 journal。插件在这种情况下**记录失败不拦着关闭** —— 因为没有 journal 的机器同样不会有读它的看门狗，直接杀就行。journal 目录按 `DSH_DESKTOP_UPDATE_JOURNAL_DIR` → `~/.dsh/logs/update-journal` 两级定位。
 
@@ -37,9 +43,10 @@
 **电源菜单目前是 Windows 专用。**
 
 - 关闭用 `taskkill`、通用重启用 PowerShell + WMI 读进程信息 —— 都是 Windows 命令
-- 在 macOS / Linux 上，两个按钮会**明确报失败**（不会静默无反应）；刷新按钮不受影响
+- 在 macOS / Linux 上，两个写端点直接回 `501`（`{"ok":false,"error":"power API is Windows-only","platform":…}`），不会让客户端进入 90 秒兜底等待；客户端挂载时还会探一次 `/api/power/status`，非 Windows 就把电源按钮置灰并注明原因 —— 用户根本点不到
+- 刷新按钮不受影响
 
-**验证范围**：本插件在一台 Windows 11 机器上实测通过（刷新、拉起菜单、重启、关闭、以及通用重启路径的 `probe` 模式）。**通用路径（`dsh-power.ps1`）的读参部分已用只读 probe 验证能取到正确的 exe 与参数，但尚未在第二台机器上端到端跑过。** 如果你在别的机器上遇到问题，请带 `~/.dsh/logs/` 里的相关输出提 issue。
+**验证范围**：本插件在一台 Windows 11 机器上实测通过（刷新、拉起菜单、重启、关闭、以及通用重启路径的 `probe` 模式）。**通用路径（`dsh-power.ps1`）的读参部分已用只读 probe 验证能取到正确的 exe 与参数，但尚未在第二台机器上端到端跑过。** 按 PID 杀树那条分支的机制、父进程名核验、以及平台 501 判定都有单测覆盖（20 条断言），并在第二实例上实测过「杀一棵树、另一实例不受影响」；但**真机点一次「关闭」让整棵树消失**这一步会掐断当前会话，尚未在本机跑过。 如果你在别的机器上遇到问题，请带 `~/.dsh/logs/` 里的相关输出提 issue。
 
 ## 安装
 
